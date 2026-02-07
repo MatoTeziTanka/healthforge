@@ -1,13 +1,55 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, Component, type ReactNode } from 'react'
 import { liteClient as algoliasearch } from 'algoliasearch/lite'
+import { InstantSearch, SearchBox, useHits, Configure } from 'react-instantsearch'
 
 const ALGOLIA_APP_ID = process.env.NEXT_PUBLIC_ALGOLIA_APP_ID || 'RM2LBYLLID'
 const ALGOLIA_SEARCH_KEY = process.env.NEXT_PUBLIC_ALGOLIA_SEARCH_KEY || '00076acd167ffcfcf8bec05ae031852a'
 const ALGOLIA_INDEX = 'healthforge_items'
 
 const searchClient = algoliasearch(ALGOLIA_APP_ID, ALGOLIA_SEARCH_KEY)
+
+// --- Safe Accessors (prevent runtime crashes on sparse Algolia records) ---
+
+function safeArray<T>(val: T[] | undefined | null): T[] {
+  return Array.isArray(val) ? val : []
+}
+
+function safeString(val: string | undefined | null, fallback = ''): string {
+  return typeof val === 'string' ? val : fallback
+}
+
+function safeNumber(val: number | undefined | null, fallback = 0): number {
+  return typeof val === 'number' && !isNaN(val) ? val : fallback
+}
+
+// --- Error Boundary ---
+
+class ErrorBoundary extends Component<
+  { children: ReactNode; fallback?: ReactNode },
+  { hasError: boolean }
+> {
+  constructor(props: { children: ReactNode; fallback?: ReactNode }) {
+    super(props)
+    this.state = { hasError: false }
+  }
+  static getDerivedStateFromError() {
+    return { hasError: true }
+  }
+  render() {
+    if (this.state.hasError) {
+      return this.props.fallback || (
+        <div className="bg-red-50 border border-red-200 rounded-xl p-4 text-center text-red-600 text-sm">
+          Failed to render this item.
+        </div>
+      )
+    }
+    return this.props.children
+  }
+}
+
+// --- Interfaces ---
 
 interface WellnessItem {
   objectID: string
@@ -45,6 +87,8 @@ interface UserProfile {
   diet: string
 }
 
+// --- Constants ---
+
 const GOALS = [
   { id: 'weight loss', label: 'Weight Loss', icon: '🔥' },
   { id: 'muscle building', label: 'Build Muscle', icon: '💪' },
@@ -69,6 +113,13 @@ const CATEGORY_ICONS: Record<string, string> = {
   meal_plan: '🥗',
 }
 
+const CATEGORY_LABELS: Record<string, string> = {
+  exercise: 'Exercises',
+  supplement: 'Supplements',
+  gear: 'Gear',
+  meal_plan: 'Meal Plans',
+}
+
 const CATEGORY_COLORS: Record<string, string> = {
   exercise: 'from-blue-500 to-blue-600',
   supplement: 'from-purple-500 to-purple-600',
@@ -76,91 +127,102 @@ const CATEGORY_COLORS: Record<string, string> = {
   meal_plan: 'from-green-500 to-green-600',
 }
 
+const ALL_CATEGORIES = ['exercise', 'supplement', 'gear', 'meal_plan']
+
+// --- Components ---
+
 function RatingStars({ rating }: { rating: number }) {
+  const r = safeNumber(rating)
   return (
-    <div className="flex items-center gap-0.5">
+    <div className="flex items-center gap-0.5" aria-label={`Rating: ${r.toFixed(1)} out of 5`}>
       {[1, 2, 3, 4, 5].map((star) => (
-        <span key={star} className={`text-xs ${star <= Math.round(rating) ? 'text-yellow-400' : 'text-gray-200'}`}>
+        <span key={star} className={`text-xs ${star <= Math.round(r) ? 'text-yellow-400' : 'text-gray-200'}`}>
           ★
         </span>
       ))}
-      <span className="text-xs text-gray-500 ml-1">{rating.toFixed(1)}</span>
+      <span className="text-xs text-gray-500 ml-1">{r.toFixed(1)}</span>
     </div>
   )
 }
 
 function KitItemCard({ item, onRemove }: { item: WellnessItem; onRemove: () => void }) {
   const [expanded, setExpanded] = useState(false)
+  const category = safeString(item.category, 'other')
+  const goals = safeArray(item.goals)
+  const allergens = safeArray(item.allergens)
+  const muscleGroups = safeArray(item.muscle_groups)
+  const equipment = safeArray(item.equipment)
+  const benefits = safeArray(item.benefits)
 
   return (
     <div className="bg-white rounded-xl border border-gray-200 overflow-hidden hover:shadow-md transition-all slide-in">
-      <div className={`bg-gradient-to-r ${CATEGORY_COLORS[item.category] || 'from-gray-500 to-gray-600'} p-3 text-white`}>
+      <div className={`bg-gradient-to-r ${CATEGORY_COLORS[category] || 'from-gray-500 to-gray-600'} p-3 text-white`}>
         <div className="flex justify-between items-start">
           <div className="flex items-center gap-2">
-            <span className="text-lg">{CATEGORY_ICONS[item.category] || '📦'}</span>
+            <span className="text-lg">{CATEGORY_ICONS[category] || '📦'}</span>
             <div>
-              <h3 className="font-semibold text-sm leading-tight">{item.name}</h3>
-              <p className="text-white/70 text-xs capitalize">{item.subcategory}</p>
+              <h3 className="font-semibold text-sm leading-tight">{safeString(item.name, 'Unnamed Item')}</h3>
+              <p className="text-white/70 text-xs capitalize">{safeString(item.subcategory)}</p>
             </div>
           </div>
-          <button onClick={onRemove} className="text-white/50 hover:text-white text-lg leading-none" title="Remove">×</button>
+          <button onClick={onRemove} className="text-white/50 hover:text-white text-lg leading-none" aria-label={`Remove ${safeString(item.name)}`}>×</button>
         </div>
       </div>
 
       <div className="p-3 space-y-2">
         <div className="flex items-center justify-between">
-          <RatingStars rating={item.rating} />
+          <RatingStars rating={safeNumber(item.rating)} />
           <span className={`text-xs px-2 py-0.5 rounded-full ${
             item.difficulty === 'beginner' ? 'bg-green-100 text-green-700' :
             item.difficulty === 'intermediate' ? 'bg-yellow-100 text-yellow-700' :
             'bg-red-100 text-red-700'
           }`}>
-            {item.difficulty}
+            {safeString(item.difficulty, 'any')}
           </span>
         </div>
 
-        {item.category === 'exercise' && (
+        {category === 'exercise' && (
           <div className="flex gap-3 text-xs text-gray-500">
-            {item.duration_minutes > 0 && <span>⏱️ {item.duration_minutes}min</span>}
-            {item.calories_per_30min > 0 && <span>🔥 {item.calories_per_30min} cal/30min</span>}
+            {safeNumber(item.duration_minutes) > 0 && <span>⏱️ {item.duration_minutes}min</span>}
+            {safeNumber(item.calories_per_30min) > 0 && <span>🔥 {item.calories_per_30min} cal/30min</span>}
           </div>
         )}
 
-        {item.category === 'meal_plan' && item.macros && (
+        {category === 'meal_plan' && item.macros && (
           <div className="grid grid-cols-3 gap-1 text-xs">
             <div className="bg-blue-50 rounded p-1.5 text-center">
-              <div className="font-bold text-blue-700">{item.macros.protein_g}g</div>
+              <div className="font-bold text-blue-700">{safeNumber(item.macros.protein_g)}g</div>
               <div className="text-blue-500">Protein</div>
             </div>
             <div className="bg-amber-50 rounded p-1.5 text-center">
-              <div className="font-bold text-amber-700">{item.macros.carbs_g}g</div>
+              <div className="font-bold text-amber-700">{safeNumber(item.macros.carbs_g)}g</div>
               <div className="text-amber-500">Carbs</div>
             </div>
             <div className="bg-pink-50 rounded p-1.5 text-center">
-              <div className="font-bold text-pink-700">{item.macros.fat_g}g</div>
+              <div className="font-bold text-pink-700">{safeNumber(item.macros.fat_g)}g</div>
               <div className="text-pink-500">Fat</div>
             </div>
           </div>
         )}
 
-        {item.category === 'supplement' && item.dosage && (
+        {category === 'supplement' && item.dosage && (
           <p className="text-xs text-gray-500">💊 {item.dosage}</p>
         )}
 
-        {item.price_range_usd > 0 && (
+        {safeNumber(item.price_range_usd) > 0 && (
           <p className="text-xs text-gray-500">💰 ~${item.price_range_usd}</p>
         )}
 
         <div className="flex flex-wrap gap-1">
-          {item.goals.slice(0, 3).map((g) => (
+          {goals.slice(0, 3).map((g) => (
             <span key={g} className="text-xs bg-forge-50 text-forge-700 px-1.5 py-0.5 rounded-full">{g}</span>
           ))}
         </div>
 
-        {item.allergens.length > 0 && (
+        {allergens.length > 0 && (
           <div className="flex items-center gap-1">
             <span className="text-xs text-red-500">⚠️ Contains:</span>
-            {item.allergens.map((a) => (
+            {allergens.map((a) => (
               <span key={a} className="text-xs bg-red-50 text-red-600 px-1.5 py-0.5 rounded-full">{a}</span>
             ))}
           </div>
@@ -168,27 +230,27 @@ function KitItemCard({ item, onRemove }: { item: WellnessItem; onRemove: () => v
 
         {expanded && (
           <div className="pt-2 border-t border-gray-100 space-y-2">
-            <p className="text-xs text-gray-600">{item.description}</p>
-            {item.muscle_groups.length > 0 && item.muscle_groups[0] !== 'mind' && (
+            <p className="text-xs text-gray-600">{safeString(item.description)}</p>
+            {muscleGroups.length > 0 && muscleGroups[0] !== 'mind' && (
               <div className="flex flex-wrap gap-1">
                 <span className="text-xs text-gray-400">Targets:</span>
-                {item.muscle_groups.map((m) => (
+                {muscleGroups.map((m) => (
                   <span key={m} className="text-xs bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded">{m}</span>
                 ))}
               </div>
             )}
-            {item.equipment.length > 0 && (
+            {equipment.length > 0 && (
               <div className="flex flex-wrap gap-1">
                 <span className="text-xs text-gray-400">Needs:</span>
-                {item.equipment.map((e) => (
+                {equipment.map((e) => (
                   <span key={e} className="text-xs bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded">{e}</span>
                 ))}
               </div>
             )}
-            {item.benefits && (
+            {benefits.length > 0 && (
               <div className="flex flex-wrap gap-1">
                 <span className="text-xs text-gray-400">Benefits:</span>
-                {item.benefits.map((b) => (
+                {benefits.map((b) => (
                   <span key={b} className="text-xs bg-green-50 text-green-600 px-1.5 py-0.5 rounded">{b}</span>
                 ))}
               </div>
@@ -198,6 +260,7 @@ function KitItemCard({ item, onRemove }: { item: WellnessItem; onRemove: () => v
 
         <button
           onClick={() => setExpanded(!expanded)}
+          aria-expanded={expanded}
           className="text-xs text-forge-600 hover:text-forge-700 font-medium w-full text-center"
         >
           {expanded ? '▲ Less' : '▼ Details'}
@@ -210,7 +273,7 @@ function KitItemCard({ item, onRemove }: { item: WellnessItem; onRemove: () => v
 function CompatibilityAlert({ alerts }: { alerts: string[] }) {
   if (alerts.length === 0) return null
   return (
-    <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 mb-6">
+    <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 mb-6" role="alert">
       <h3 className="font-semibold text-amber-800 text-sm flex items-center gap-2">
         <span>⚠️</span> Compatibility Alerts
       </h3>
@@ -227,14 +290,14 @@ function CompatibilityAlert({ alerts }: { alerts: string[] }) {
 }
 
 function KitSummary({ kit }: { kit: WellnessItem[] }) {
-  const totalCost = kit.reduce((sum, item) => sum + (item.price_range_usd || 0), 0)
+  const totalCost = kit.reduce((sum, item) => sum + safeNumber(item.price_range_usd), 0)
   const totalCalories = kit
-    .filter((i) => i.category === 'exercise')
-    .reduce((sum, i) => sum + i.calories_per_30min, 0)
-  const categories = [...new Set(kit.map((i) => i.category))]
+    .filter((i) => safeString(i.category) === 'exercise')
+    .reduce((sum, i) => sum + safeNumber(i.calories_per_30min), 0)
+  const categories = [...new Set(kit.map((i) => safeString(i.category)))]
 
   return (
-    <div className="bg-gradient-to-r from-forge-700 to-forge-600 rounded-xl p-4 text-white mb-6">
+    <div className="bg-gradient-to-r from-forge-700 to-forge-600 rounded-xl p-4 text-white mb-6" aria-label="Kit summary statistics">
       <h3 className="font-bold text-sm mb-3">Kit Summary</h3>
       <div className="grid grid-cols-4 gap-3 text-center">
         <div>
@@ -258,6 +321,39 @@ function KitSummary({ kit }: { kit: WellnessItem[] }) {
   )
 }
 
+// --- Algolia InstantSearch Explore Section ---
+
+function ExploreHits() {
+  const { items } = useHits<WellnessItem>()
+  if (items.length === 0) return <p className="text-sm text-gray-400 text-center py-4">Type to search wellness items...</p>
+  return (
+    <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-3">
+      {items.slice(0, 6).map((item) => (
+        <div key={item.objectID} className="bg-white rounded-lg border border-gray-200 p-3 hover:shadow-md transition-shadow">
+          <div className="flex items-center gap-2 mb-1">
+            <span>{CATEGORY_ICONS[safeString(item.category)] || '📦'}</span>
+            <span className="font-medium text-sm">{safeString(item.name, 'Item')}</span>
+          </div>
+          <p className="text-xs text-gray-500 capitalize">{safeString(item.subcategory)} — {safeString(item.category)}</p>
+          <div className="flex items-center justify-between mt-2">
+            <RatingStars rating={safeNumber(item.rating)} />
+            {safeNumber(item.price_range_usd) > 0 && (
+              <span className="text-xs text-gray-400">${item.price_range_usd}</span>
+            )}
+          </div>
+          <div className="flex flex-wrap gap-1 mt-2">
+            {safeArray(item.goals).slice(0, 2).map((g) => (
+              <span key={g} className="text-xs bg-forge-50 text-forge-700 px-1.5 py-0.5 rounded-full">{g}</span>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+// --- Main Component ---
+
 export default function Home() {
   const [profile, setProfile] = useState<UserProfile>({
     goals: [],
@@ -271,71 +367,75 @@ export default function Home() {
 
   const [kit, setKit] = useState<WellnessItem[]>([])
   const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
   const [alerts, setAlerts] = useState<string[]>([])
   const [step, setStep] = useState(1)
 
-  const buildKit = useCallback(async () => {
+  async function buildKit() {
     if (profile.goals.length === 0) return
     setLoading(true)
+    setError(null)
 
     try {
-      const facetFilters: string[][] = []
-      if (profile.difficulty !== 'any') {
-        facetFilters.push([`difficulty:${profile.difficulty}`, 'difficulty:beginner'])
-      }
-
-      const categories = ['exercise', 'supplement', 'gear', 'meal_plan']
       const kitItems: WellnessItem[] = []
       const newAlerts: string[] = []
 
-      for (const category of categories) {
-        const queryParts = profile.goals.join(' ')
-        const categoryFilters = [[`category:${category}`], ...facetFilters]
-
+      // Build per-category search requests (parallel execution)
+      const searchPromises = ALL_CATEGORIES.map((category) => {
+        const categoryFilters: string[][] = [[`category:${category}`]]
+        if (profile.difficulty !== 'any') {
+          categoryFilters.push([`difficulty:${profile.difficulty}`, 'difficulty:beginner'])
+        }
         if (profile.indoor_only && category === 'exercise') {
           categoryFilters.push(['indoor:true'])
         }
-
-        const { results } = await searchClient.search<WellnessItem>({
+        return searchClient.search<WellnessItem>({
           requests: [{
             indexName: ALGOLIA_INDEX,
-            query: queryParts,
+            query: profile.goals.join(' '),
             hitsPerPage: category === 'exercise' ? 5 : 3,
             facetFilters: categoryFilters,
           }],
         })
-        const firstResult = results[0]
+      })
+
+      // Fire all 4 category searches in parallel
+      const allResults = await Promise.all(searchPromises)
+
+      // Process results per category
+      ALL_CATEGORIES.forEach((category, idx) => {
+        const firstResult = allResults[idx].results[0]
         const hits = ('hits' in firstResult ? firstResult.hits : []) as WellnessItem[]
 
         for (const hit of hits) {
+          const hitAllergens = safeArray(hit.allergens)
+          const hitWeather = safeArray(hit.weather_suitability)
+
           // Allergy check
-          if (hit.allergens && hit.allergens.length > 0) {
-            const conflict = hit.allergens.filter((a) => profile.allergies.includes(a))
+          if (hitAllergens.length > 0) {
+            const conflict = hitAllergens.filter((a) => profile.allergies.includes(a))
             if (conflict.length > 0) {
               newAlerts.push(
-                `"${hit.name}" contains ${conflict.join(', ')} — excluded from your kit due to allergy settings`
+                `"${safeString(hit.name, 'Item')}" contains ${conflict.join(', ')} — excluded from your kit due to allergy settings`
               )
               continue
             }
           }
 
           // Budget check
-          if (profile.budget === 'budget' && hit.price_range_usd > 50) {
-            continue
-          }
-          if (profile.budget === 'moderate' && hit.price_range_usd > 200) {
-            continue
-          }
+          const price = safeNumber(hit.price_range_usd)
+          if (profile.budget === 'budget' && price > 50) continue
+          if (profile.budget === 'moderate' && price > 200) continue
 
           // Weather check
           if (
             profile.weather !== 'any' &&
-            hit.weather_suitability &&
-            !hit.weather_suitability.includes('any') &&
-            !hit.weather_suitability.includes(profile.weather)
+            hitWeather.length > 0 &&
+            !hitWeather.includes('any') &&
+            !hitWeather.includes(profile.weather)
           ) {
             newAlerts.push(
-              `"${hit.name}" may not be ideal for ${profile.weather} weather — included but flagged`
+              `"${safeString(hit.name, 'Item')}" may not be ideal for ${profile.weather} weather — included but flagged`
             )
           }
 
@@ -352,14 +452,16 @@ export default function Home() {
 
           kitItems.push(hit)
         }
-      }
+      })
 
       // Equipment overlap check
       const allEquipment = kitItems
-        .filter((i) => i.category === 'exercise')
-        .flatMap((i) => i.equipment)
+        .filter((i) => safeString(i.category) === 'exercise')
+        .flatMap((i) => safeArray(i.equipment))
       const exerciseNeeds = [...new Set(allEquipment)].filter(Boolean)
-      const gearProvided = kitItems.filter((i) => i.category === 'gear').map((i) => i.name.toLowerCase())
+      const gearProvided = kitItems
+        .filter((i) => safeString(i.category) === 'gear')
+        .map((i) => safeString(i.name).toLowerCase())
       for (const need of exerciseNeeds) {
         if (!gearProvided.some((g) => g.includes(need.toLowerCase()))) {
           newAlerts.push(`Your exercises need "${need}" — consider adding matching gear to your kit`)
@@ -368,18 +470,21 @@ export default function Home() {
 
       setKit(kitItems)
       setAlerts(newAlerts)
-    } catch {
-      setAlerts(['Error building kit. Please try again.'])
+    } catch (err) {
+      console.error('Kit build error:', err)
+      setError('Failed to build your kit. Please check your connection and try again.')
+      setAlerts([])
     } finally {
       setLoading(false)
     }
-  }, [profile])
+  }
 
   useEffect(() => {
     if (step === 3 && profile.goals.length > 0) {
       buildKit()
     }
-  }, [step, buildKit, profile.goals.length])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step])
 
   const toggleGoal = (goal: string) => {
     setProfile((p) => ({
@@ -404,8 +509,9 @@ export default function Home() {
   }
 
   const groupedKit = kit.reduce<Record<string, WellnessItem[]>>((acc, item) => {
-    if (!acc[item.category]) acc[item.category] = []
-    acc[item.category].push(item)
+    const cat = safeString(item.category, 'other')
+    if (!acc[cat]) acc[cat] = []
+    acc[cat].push(item)
     return acc
   }, {})
 
@@ -413,7 +519,7 @@ export default function Home() {
     <div className="min-h-screen bg-gray-50">
       {/* Header */}
       <header className="bg-gradient-to-r from-forge-900 via-forge-800 to-forge-700 text-white">
-        <nav className="max-w-6xl mx-auto px-6 py-4 flex justify-between items-center">
+        <nav className="max-w-6xl mx-auto px-6 py-4 flex justify-between items-center" aria-label="Main navigation">
           <div className="flex items-center gap-2">
             <span className="text-2xl">🏋️</span>
             <span className="text-xl font-bold">HealthForge</span>
@@ -433,14 +539,16 @@ export default function Home() {
           </p>
 
           {/* Progress Steps */}
-          <div className="flex justify-center gap-2 mb-8 fade-in-up fade-delay-2">
+          <div className="flex justify-center gap-2 mb-8 fade-in-up fade-delay-2" role="navigation" aria-label="Kit builder steps">
             {[1, 2, 3].map((s) => (
               <div key={s} className="flex items-center gap-2">
                 <button
-                  onClick={() => setStep(s)}
+                  onClick={() => s < step ? setStep(s) : undefined}
+                  aria-label={`Step ${s}: ${s === 1 ? 'Goals' : s === 2 ? 'Preferences' : 'Your Kit'}${step === s ? ' (current)' : step > s ? ' (completed)' : ''}`}
+                  aria-current={step === s ? 'step' : undefined}
                   className={`w-10 h-10 rounded-full flex items-center justify-center font-bold transition ${
                     step === s ? 'bg-white text-forge-800 pulse-ring' :
-                    step > s ? 'bg-forge-500 text-white' : 'bg-forge-700 text-forge-400'
+                    step > s ? 'bg-forge-500 text-white cursor-pointer' : 'bg-forge-700 text-forge-400'
                   }`}
                 >
                   {step > s ? '✓' : s}
@@ -462,11 +570,12 @@ export default function Home() {
             <h2 className="text-2xl font-bold mb-2">What are your wellness goals?</h2>
             <p className="text-gray-500 mb-8">Select one or more goals. Your kit will be tailored to these.</p>
 
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-8">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-8" role="group" aria-label="Wellness goals">
               {GOALS.map((goal) => (
                 <button
                   key={goal.id}
                   onClick={() => toggleGoal(goal.id)}
+                  aria-pressed={profile.goals.includes(goal.id)}
                   className={`p-4 rounded-xl border-2 text-center transition-all ${
                     profile.goals.includes(goal.id)
                       ? 'border-forge-500 bg-forge-50 shadow-md'
@@ -496,13 +605,15 @@ export default function Home() {
 
             <div className="space-y-6">
               {/* Difficulty */}
-              <div>
-                <label className="text-sm font-semibold text-gray-700 mb-2 block">Fitness Level</label>
-                <div className="flex gap-2">
+              <fieldset>
+                <legend className="text-sm font-semibold text-gray-700 mb-2">Fitness Level</legend>
+                <div className="flex gap-2" role="radiogroup">
                   {DIFFICULTIES.map((d) => (
                     <button
                       key={d}
                       onClick={() => setProfile((p) => ({ ...p, difficulty: d }))}
+                      role="radio"
+                      aria-checked={profile.difficulty === d}
                       className={`flex-1 py-2.5 rounded-lg text-sm font-medium capitalize transition ${
                         profile.difficulty === d
                           ? 'bg-forge-600 text-white'
@@ -513,19 +624,20 @@ export default function Home() {
                     </button>
                   ))}
                 </div>
-              </div>
+              </fieldset>
 
               {/* Allergies */}
-              <div>
-                <label className="text-sm font-semibold text-gray-700 mb-2 block">
+              <fieldset>
+                <legend className="text-sm font-semibold text-gray-700 mb-2">
                   Allergies / Restrictions
                   <span className="text-gray-400 font-normal ml-1">(items containing these will be excluded)</span>
-                </label>
-                <div className="flex flex-wrap gap-2">
+                </legend>
+                <div className="flex flex-wrap gap-2" role="group">
                   {ALLERGIES.map((a) => (
                     <button
                       key={a}
                       onClick={() => toggleAllergy(a)}
+                      aria-pressed={profile.allergies.includes(a)}
                       className={`px-3 py-1.5 rounded-full text-sm capitalize transition ${
                         profile.allergies.includes(a)
                           ? 'bg-red-100 text-red-700 border border-red-300'
@@ -536,16 +648,18 @@ export default function Home() {
                     </button>
                   ))}
                 </div>
-              </div>
+              </fieldset>
 
               {/* Diet */}
-              <div>
-                <label className="text-sm font-semibold text-gray-700 mb-2 block">Diet Preference</label>
-                <div className="flex flex-wrap gap-2">
+              <fieldset>
+                <legend className="text-sm font-semibold text-gray-700 mb-2">Diet Preference</legend>
+                <div className="flex flex-wrap gap-2" role="radiogroup">
                   {DIETS.map((d) => (
                     <button
                       key={d}
                       onClick={() => setProfile((p) => ({ ...p, diet: d }))}
+                      role="radio"
+                      aria-checked={profile.diet === d}
                       className={`px-3 py-1.5 rounded-full text-sm capitalize transition ${
                         profile.diet === d
                           ? 'bg-green-100 text-green-700 border border-green-300'
@@ -556,13 +670,14 @@ export default function Home() {
                     </button>
                   ))}
                 </div>
-              </div>
+              </fieldset>
 
               {/* Weather + Indoor */}
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="text-sm font-semibold text-gray-700 mb-2 block">Weather</label>
+                  <label htmlFor="weather-select" className="text-sm font-semibold text-gray-700 mb-2 block">Weather</label>
                   <select
+                    id="weather-select"
                     value={profile.weather}
                     onChange={(e) => setProfile((p) => ({ ...p, weather: e.target.value }))}
                     className="w-full py-2.5 px-3 rounded-lg border border-gray-200 text-sm capitalize"
@@ -571,8 +686,9 @@ export default function Home() {
                   </select>
                 </div>
                 <div>
-                  <label className="text-sm font-semibold text-gray-700 mb-2 block">Budget</label>
+                  <label htmlFor="budget-select" className="text-sm font-semibold text-gray-700 mb-2 block">Budget</label>
                   <select
+                    id="budget-select"
                     value={profile.budget}
                     onChange={(e) => setProfile((p) => ({ ...p, budget: e.target.value }))}
                     className="w-full py-2.5 px-3 rounded-lg border border-gray-200 text-sm capitalize"
@@ -632,6 +748,7 @@ export default function Home() {
                   onClick={buildKit}
                   disabled={loading}
                   className="px-4 py-2 rounded-lg bg-forge-600 text-white text-sm hover:bg-forge-700 disabled:opacity-50 transition"
+                  aria-label="Rebuild wellness kit"
                 >
                   {loading ? '⟳ Rebuilding...' : '🔄 Rebuild Kit'}
                 </button>
@@ -639,49 +756,94 @@ export default function Home() {
             </div>
 
             {loading ? (
-              <div className="text-center py-20">
+              <div className="text-center py-20" role="status" aria-label="Loading kit">
                 <div className="text-4xl mb-4 animate-bounce">🏋️</div>
                 <p className="text-gray-500">Building your personalized wellness kit...</p>
-                <p className="text-gray-400 text-xs mt-2">Powered by Algolia — retrieving in &lt;50ms</p>
+                <p className="text-gray-400 text-xs mt-2">Powered by Algolia — 4 parallel searches in &lt;200ms</p>
+              </div>
+            ) : error ? (
+              <div className="text-center py-20" role="alert">
+                <div className="text-4xl mb-4">❌</div>
+                <p className="text-red-600 font-medium mb-2">{error}</p>
+                <button
+                  onClick={buildKit}
+                  className="px-4 py-2 rounded-lg bg-forge-600 text-white text-sm hover:bg-forge-700 transition"
+                >
+                  Try Again
+                </button>
               </div>
             ) : (
               <>
                 <KitSummary kit={kit} />
                 <CompatibilityAlert alerts={alerts} />
 
-                {Object.entries(groupedKit).map(([category, items]) => (
-                  <div key={category} className="mb-8">
-                    <h3 className="text-lg font-bold mb-3 flex items-center gap-2 capitalize">
-                      <span>{CATEGORY_ICONS[category] || '📦'}</span>
-                      {category === 'meal_plan' ? 'Meal Plans' : `${category}s`}
-                      <span className="text-sm font-normal text-gray-400">({items.length})</span>
-                    </h3>
-                    <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
-                      {items.map((item) => (
-                        <KitItemCard
-                          key={item.objectID}
-                          item={item}
-                          onRemove={() => removeFromKit(item.objectID)}
-                        />
-                      ))}
+                {/* Per-category sections with empty states */}
+                {ALL_CATEGORIES.map((category) => {
+                  const items = groupedKit[category] || []
+                  return (
+                    <div key={category} className="mb-8">
+                      <h3 className="text-lg font-bold mb-3 flex items-center gap-2">
+                        <span>{CATEGORY_ICONS[category] || '📦'}</span>
+                        {CATEGORY_LABELS[category] || category}
+                        <span className="text-sm font-normal text-gray-400">({items.length})</span>
+                      </h3>
+                      {items.length > 0 ? (
+                        <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
+                          {items.map((item) => (
+                            <ErrorBoundary key={item.objectID}>
+                              <KitItemCard
+                                item={item}
+                                onRemove={() => removeFromKit(item.objectID)}
+                              />
+                            </ErrorBoundary>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="bg-gray-50 border border-dashed border-gray-200 rounded-xl p-6 text-center text-gray-400 text-sm">
+                          No {(CATEGORY_LABELS[category] || category).toLowerCase()} matched your criteria.
+                          Try adjusting your preferences.
+                        </div>
+                      )}
                     </div>
-                  </div>
-                ))}
+                  )
+                })}
 
-                {kit.length === 0 && !loading && (
-                  <div className="text-center py-20 text-gray-400">
+                {kit.length === 0 && (
+                  <div className="text-center py-12 text-gray-400">
                     <div className="text-4xl mb-4">🤔</div>
-                    <p>No items matched your criteria. Try adjusting your preferences.</p>
+                    <p>No items matched your criteria at all. Try broader goals or fewer restrictions.</p>
                   </div>
                 )}
               </>
             )}
           </div>
         )}
+
+        {/* Explore Section — Algolia InstantSearch Widgets */}
+        <section className="mt-16 pt-8 border-t border-gray-200" id="explore" aria-label="Explore wellness items">
+          <h2 className="text-2xl font-bold mb-2">Explore All Wellness Items</h2>
+          <p className="text-gray-500 mb-6 text-sm">Search our database of 110+ exercises, supplements, gear, and meal plans — powered by Algolia InstantSearch.</p>
+          <InstantSearch searchClient={searchClient} indexName={ALGOLIA_INDEX}>
+            <Configure hitsPerPage={6} />
+            <div className="mb-4">
+              <SearchBox
+                placeholder="Search exercises, supplements, gear, meal plans..."
+                classNames={{
+                  root: 'relative',
+                  form: 'relative',
+                  input: 'w-full px-4 py-3 rounded-xl border border-gray-200 focus:border-forge-500 focus:ring-2 focus:ring-forge-200 outline-none text-sm',
+                  submit: 'absolute right-3 top-1/2 -translate-y-1/2',
+                  reset: 'hidden',
+                }}
+              />
+            </div>
+            <ExploreHits />
+          </InstantSearch>
+        </section>
       </main>
 
       {/* Footer */}
-      <footer className="bg-forge-900 text-forge-300 py-12">
+      <footer className="bg-forge-900 text-forge-300 py-12 mt-12">
         <div className="max-w-6xl mx-auto px-6 text-center">
           <div className="flex items-center justify-center gap-2 mb-4">
             <span className="text-2xl">🏋️</span>
