@@ -25,7 +25,7 @@ The experience works in three steps:
 
 ## Demo
 
-**Live Demo:** [YOUR_VERCEL_URL_HERE]
+**Live Demo:** [https://healthforge.vercel.app](https://healthforge.vercel.app)
 
 **GitHub:** [github.com/MatoTeziTanka/healthforge](https://github.com/MatoTeziTanka/healthforge)
 
