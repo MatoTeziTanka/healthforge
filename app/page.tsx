@@ -299,7 +299,7 @@ function KitSummary({ kit }: { kit: WellnessItem[] }) {
   return (
     <div className="bg-gradient-to-r from-forge-700 to-forge-600 rounded-xl p-4 text-white mb-6" aria-label="Kit summary statistics">
       <h3 className="font-bold text-sm mb-3">Kit Summary</h3>
-      <div className="grid grid-cols-4 gap-3 text-center">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-center">
         <div>
           <div className="text-2xl font-bold">{kit.length}</div>
           <div className="text-forge-200 text-xs">Items</div>

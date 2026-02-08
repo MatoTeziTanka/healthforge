@@ -69,25 +69,28 @@ Each item carries compatibility metadata: allergens, equipment needs, weather su
 
 ### Multi-Category Retrieval Strategy
 
-Instead of a single search, HealthForge fires **4 parallel category-specific queries** to Algolia:
+Instead of a single search, HealthForge fires **4 parallel category-specific queries** to Algolia using `Promise.all()`:
 
 ```javascript
-for (const category of ['exercise', 'supplement', 'gear', 'meal_plan']) {
-  const { results } = await searchClient.search({
+const searchPromises = ['exercise', 'supplement', 'gear', 'meal_plan'].map((category) => {
+  const categoryFilters = [[`category:${category}`]]
+  if (difficulty !== 'any') {
+    categoryFilters.push([`difficulty:${difficulty}`, 'difficulty:beginner'])
+  }
+  return searchClient.search({
     requests: [{
       indexName: 'healthforge_items',
       query: goals.join(' '),
       hitsPerPage: category === 'exercise' ? 5 : 3,
-      facetFilters: [
-        [`category:${category}`],
-        [`difficulty:${difficulty}`, 'difficulty:beginner']
-      ],
+      facetFilters: categoryFilters,
     }],
   })
-}
+})
+
+const allResults = await Promise.all(searchPromises)
 ```
 
-This approach ensures each kit section gets dedicated retrieval with category-specific result limits and difficulty fallbacks (if no intermediate items exist, beginners are included).
+All 4 searches fire simultaneously, ensuring each kit section gets dedicated retrieval with category-specific result limits and difficulty fallbacks — and the total build time is bounded by the slowest single query, not the sum of all four.
 
 ### Post-Retrieval Intelligence
 
